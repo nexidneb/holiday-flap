@@ -1,14 +1,23 @@
-# Holiday Flap
+# Holiday Arcade: Flap & Invaders
 
-A one-button ASCII arcade game for phone browsers. Every sprite, scene and obstacle is drawn with text characters.
+A retro ASCII arcade for phone browsers. Every sprite, scene and obstacle is drawn with text characters.
 
-| # | Level | Hero | Obstacles | To clear |
+Each holiday has two parts: **A. Flap** (fly through the gaps) and **B. Invaders** (clear the swarm).
+Clear a stage to unlock the next.
+
+| Stage | Holiday | Part | Hero | Goal |
 |---|---|---|---|---|
-| 1 | Halloween | Boo the ghost | jack-o'-lantern towers | 10 |
-| 2 | Thanksgiving | Tom the turkey | corn towers | 12 |
-| 3 | Christmas | Rudy the reindeer | candy canes | 15 |
+| 1 | Halloween | Flap | Boo the ghost | pass 10 jack-o'-lantern towers |
+| 2 | Halloween | Invaders | Boo the ghost | beat spiders, spooks & pumpkins |
+| 3 | Thanksgiving | Flap | Tom the turkey | pass 12 corn towers |
+| 4 | Thanksgiving | Invaders | Tom the turkey | beat pies, apples & corn |
+| 5 | Christmas | Flap | Rudy the reindeer | pass 15 candy canes |
+| 6 | Christmas | Invaders | Rudy the reindeer | beat stars, ornaments & gifts |
 
-Clear a level to unlock the next. Tap (or Space / Up arrow) to flap.
+## Controls
+
+- **Flap:** tap anywhere (or Space / Up arrow).
+- **Invaders:** drag anywhere to move (or Left/Right arrows). Firing is automatic. You have 3 lives; hide behind the shields, and shoot the bonus flyer for +100.
 
 ## Run it
 
