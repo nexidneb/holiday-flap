@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0a0316">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Holiday Flap - an ASCII arcade</title>
+<style>
+  :root { --accent: #ff8a1f; --u: 3.6px; }
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Courier New", Courier, ui-monospace, Menlo, monospace; color: #fff;
+  }
+  #wrap { position: relative; overflow: hidden; background: #000; }
+  canvas { display: block; }
+  #ui {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    padding: calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 10px);
+    box-sizing: border-box; pointer-events: none;
+  }
+  .panel {
+    pointer-events: auto; box-sizing: border-box; width: 92%;
+    background: rgba(6, 3, 14, .86); border: 3px solid var(--accent);
+    box-shadow: 0 0 0 3px #000, 6px 6px 0 3px rgba(0,0,0,.55);
+    padding: calc(var(--u)*3.5) calc(var(--u)*3);
+  }
+  .logo { margin: 0 auto; font-size: calc(var(--u)*2.85); line-height: 1.08; font-weight: bold; white-space: pre; text-align: left; display: inline-block; }
+  .flap { font-size: calc(var(--u)*7.5); font-weight: bold; letter-spacing: calc(var(--u)*1.6); margin: calc(var(--u)*1) 0 0; text-shadow: 3px 3px 0 #000; }
+  .sub { font-size: calc(var(--u)*3.3); color: #b9b2cc; margin: calc(var(--u)*1) 0 calc(var(--u)*3); }
+  .ttl { font-size: calc(var(--u)*6.4); font-weight: bold; text-shadow: 3px 3px 0 #000; line-height: 1.1; }
+  .lv { font-size: calc(var(--u)*4); letter-spacing: 3px; color: #fff; text-shadow: 2px 2px 0 #000; }
+  .txt { font-size: calc(var(--u)*3.8); margin-top: calc(var(--u)*2); text-shadow: 2px 2px 0 #000; line-height: 1.35; }
+  .big { font-size: calc(var(--u)*14); font-weight: bold; text-shadow: 4px 4px 0 #000; line-height: 1.1; margin-top: calc(var(--u)*2); }
+  .big small { font-size: .4em; color: #b9b2cc; }
+  .btn {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    width: 100%; margin: calc(var(--u)*2.6) 0 0; min-height: 48px; box-sizing: border-box;
+    font: bold calc(var(--u)*4.3) "Courier New", Courier, monospace; letter-spacing: 1px;
+    padding: 10px 12px; background: var(--accent); color: #12061a;
+    border: 0; border-radius: 0; box-shadow: 4px 4px 0 #000; cursor: pointer;
+  }
+  .btn.c { justify-content: center; }
+  .btn small { font-size: .78em; opacity: .8; }
+  .btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 #000; }
+  .btn[disabled] { background: #3a3445 !important; color: #8a8496; }
+  .btn.alt { background: #e9e4f5; }
+  .hint { font-size: calc(var(--u)*3); color: #8f88a6; margin-top: calc(var(--u)*3.2); }
+  .ready { position: absolute; left: 0; right: 0; top: 11%; padding: 0 8%; }
+  .tap { position: absolute; left: 0; right: 0; bottom: 21%; font-size: calc(var(--u)*6); font-weight: bold; text-shadow: 3px 3px 0 #000; }
+  .blink { animation: bl 1s steps(2, start) infinite; }
+  @keyframes bl { 50% { opacity: 0; } }
+  #snd {
+    position: absolute; z-index: 2; top: calc(env(safe-area-inset-top) + 6px); right: 6px;
+    font: bold calc(var(--u)*3) "Courier New", Courier, monospace; color: #fff;
+    background: rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.5); padding: 8px 8px; min-height: 36px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="ui"></div>
+  <button id="snd" type="button" aria-label="Toggle sound">SND:ON</button>
+</div>
+<script>
+'use strict';
+/* =========================================================================
+   HOLIDAY FLAP — a one-button ASCII arcade with three holiday levels.
+   Everything (sprites, scenery, obstacles) is drawn with text glyphs on a
+   character grid. Self-contained; no dependencies.
+   ========================================================================= */
+
+const COLS = 32;          // character columns across the play field
+const PW = 6;             // obstacle body width (cols)
+const GROUND_ROWS = 3;
+const HERO_COL = 7;
+const STRIP = COLS * 2;   // width (cols) of looping parallax strips
+const GRAVITY = 50;       // rows / s^2
+const FLAP_V = 15.5;      // rows / s
+const MAX_FALL = 24;
+
+/* ---------- scenery art (mid layer) ---------- */
+const ART = {
+  deadTree: { a: ['\\ | /', ' \\|/ ', '  |  ', '  |  '], m: { def: '#8a68a8' } },
+  grave:    { a: [' ___ ', '/RIP\\', '|   |', '|___|'], m: { def: '#9a94b0', R: '#f0ecfa', I: '#f0ecfa', P: '#f0ecfa' } },
+  house:    { a: ['   /\\   ', '  /  \\  ', ' /____\\ ', ' |[] []|', ' |_[]__|'], m: { def: '#7d5c9c', '[': '#ffd23f', ']': '#ffd23f' } },
+  corn:     { a: ['\\ | /', ' \\|/ ', '--|--', ' /|\\ ', '  |  '], m: { def: '#6f9e3a', '|': '#a7c95a' } },
+  barn:     { a: ['   __   ', '  /  \\  ', ' /____\\ ', ' |\\  /| ', ' | \\/ | ', ' |_/\\_| '], m: { def: '#d23a2c', _: '#f5e6c8', '/': '#f5e6c8', '\\': '#f5e6c8' } },
+  scarecrow:{ a: ['  _A_ ', '  (") ', ' -[+]-', '   |  '], m: { def: '#e8b04a', A: '#8b5a2b', _: '#8b5a2b', '[': '#3a6ea5', ']': '#3a6ea5', '+': '#d9442b', '"': '#3a220c' } },
+  hay:      { a: ['[##]', '[##]'], m: { def: '#e6b84a', '[': '#a8751a', ']': '#a8751a' } },
+  pine:     { a: ['   *   ', '  /o\\  ', ' /*_o\\ ', '/o_*__\\', '  |_|  '], m: { def: '#2fae5a', '*': '#ffe14d', o: ['#ff2a3d', '#4aa8ff', '#ff7ad9', '#ffe14d'], '|': '#a0703a' } },
+  snowman:  { a: ['  _=_  ', ' (o.o) ', '(  :  )', '(_____)'], m: { def: '#ffffff', '=': '#ff2a3d', o: '#1d2a44', ':': '#1d2a44', '.': '#ff8c2a' } },
+  xhouse:   { a: ['  _____  ', ' /*o*o*\\ ', '/_______\\', ' |[] []| ', ' |__[]_| '], m: { def: '#c47a4a', _: '#ffffff', '*': ['#ff2a3d', '#2fd16a', '#ffe14d', '#4aa8ff'], o: ['#ff2a3d', '#2fd16a', '#ffe14d', '#4aa8ff'], '[': '#ffd23f', ']': '#ffd23f' } },
+};
+
+/* ---------- the three levels ---------- */
+const THEMES = [
+  {
+    name: 'HALLOWEEN', blurb: "Float Boo the ghost past the jack-o'-lantern towers!",
+    obstacle: 'pumpkin towers', deathMsg: 'BOO GOT SPOOKED!',
+    accent: '#ff8a1f', goal: 10, speed: 9.5, gap: 11, spacing: 19, wave: 'square',
+    sky: ['#0a0316', '#160629', '#22093c', '#33104f', '#4a165c', '#6a1f5e', '#8c2c58'],
+    stars: { n: 45, chars: ['.', '.', '+', '*'], colors: ['#ffffff', '#e2d4ff', '#ffd9a0'] },
+    celestial: 'moon',
+    far: { base: 4, amp: 3, top: ['^', '^', 'n'], topColor: '#5a2378', fill: ['.', ':', ' '], fillColor: '#43175c', bg: '#250a34' },
+    mid: ['deadTree', 'grave', 'grave', 'house', 'deadTree', 'grave'],
+    ground: { topBg: '#1d3313', top: [',', '"', "'", '`', ','], topCol: ['#3f8f35', '#2e6e2a', '#5cb04a'], deco: ['o'], decoCol: ['#ff7a1a'], decoP: 0.12, bg: '#24140a', fill: ['.', ':', '~', ' '], fillCol: '#4f2f18' },
+    pal: { O: '#ff7a1a', Y: '#ffe14d', o: '#ffb15c', G: '#58d05c', g: '#2c8a35', W: '#f6f2ff', P: '#b88cff' },
+    pipe: { bg: '#7a3206', body: [['(^ww^)', 'OYYYYO'], ['(____)', 'OooooO']], cap: [' ~~)(~~ ', ' gGOOGg '], capBg: '#173d1b' },
+    ambient: 'bats', trail: { chars: ['.', 'o', '*'], cols: ['#d8c8ff', '#a88ad8', '#ffffff'] },
+    hero: { frames: [[' .-. ', '(o o)', '|\\/\\|'], [' .-. ', '(o o)', '|/\\/|']], keys: [' WWW ', 'WOWOW', 'WWWWW'] },
+  },
+  {
+    name: 'THANKSGIVING', blurb: 'Help Tom the turkey fly the coop before dinner!',
+    obstacle: 'corn towers', deathMsg: 'TOM GOT STUFFED!',
+    accent: '#ffb53c', goal: 12, speed: 10.5, gap: 10, spacing: 18, wave: 'square',
+    sky: ['#2a1648', '#4b1f5c', '#7a2a5c', '#b23e52', '#e0603e', '#f5913e', '#ffc261'],
+    stars: { n: 6, chars: ['.'], colors: ['#ffe9c7'] },
+    celestial: 'sun',
+    far: { base: 5, amp: 3, top: ['~', '~', '-'], topColor: '#d8673a', fill: [',', '.', ' ', "'"], fillColor: '#9a4322', bg: '#6a2a16' },
+    mid: ['corn', 'corn', 'barn', 'scarecrow', 'hay', 'corn'],
+    ground: { topBg: '#7a5420', top: ['"', '|', "'", '"'], topCol: ['#f2c14e', '#d9a52a', '#ffd977'], deco: ['@'], decoCol: ['#ff8c2a'], decoP: 0.07, bg: '#4a2c12', fill: ['=', '-', '.', ' '], fillCol: '#7a4f26' },
+    pal: { Y: '#ffd447', y: '#e0a82a', G: '#7cc242', g: '#3f7f2a', B: '#b57a3e', R: '#e2452c', O: '#ff8c2a', W: '#fff4d6', C: '#f6c47a' },
+    pipe: { bg: '#9a6a14', body: [['{::::}', 'gYYYYg'], ['{:..:}', 'gYyyYg']], cap: ['/^^^^^^\\', 'CCCCCCCC'], capTop: ['\\vvvvvv/', 'CCCCCCCC'], capBg: '#8a4f1c' },
+    ambient: 'leaves', trail: { chars: [',', "'", '~'], cols: ['#e2452c', '#ff8c2a', '#ffd447'] },
+    hero: { frames: [['\\|||/', '(==o>', ' ^ ^ '], ['-\\|/-', '(==o>', ' ^ ^ ']], keys: ['ROYOR', 'BBBWY', ' O O '] },
+  },
+  {
+    name: 'CHRISTMAS', blurb: 'Guide Rudy the reindeer through candy cane alley!',
+    obstacle: 'candy canes', deathMsg: 'RUDY HIT A CANDY CANE!',
+    accent: '#ff3b4e', goal: 15, speed: 11.5, gap: 9, spacing: 18, wave: 'triangle',
+    sky: ['#020818', '#05112e', '#0a1d47', '#10295e', '#183a78', '#22508f'],
+    stars: { n: 50, chars: ['.', '.', '+', '*'], colors: ['#ffffff', '#cfe6ff', '#fff3b0'] },
+    celestial: 'crescent',
+    far: { base: 7, amp: 5, top: ['^', 'A'], topColor: '#ffffff', fill: [':', '.', ' '], fillColor: '#7d9cc9', bg: '#2f4f80', snow: true },
+    mid: ['pine', 'pine', 'snowman', 'xhouse', 'pine'],
+    ground: { topBg: '#eef7ff', top: ['~', '-', '_', '~'], topCol: ['#a9cdef', '#c4def5'], deco: ['&'], decoCol: ['#ff3b4e', '#2fd16a', '#e0b400'], decoP: 0.06, bg: '#c6def4', fill: ['*', '.', ' ', ' '], fillCol: '#94b8dc' },
+    pal: { R: '#ff2a3d', W: '#ffffff', G: '#2fd16a', g: '#0f6b34', T: '#d4a373', b: '#a0703a' },
+    pipe: { bg: '#ffffff', body: [['//////', 'RRRRRR', '#ffffff'], ['//////', 'WWWWWW', '#e01e30']], cap: ['<o*o*o*>', 'g??????g'], capBg: '#0f6b34', twinkle: ['#ff2a3d', '#ffe14d', '#4aa8ff', '#ff7ad9', '#2fd16a'] },
+    ambient: 'snow', trail: { chars: ['*', '+', '.'], cols: ['#ffe14d', '#ffffff', '#fff3b0'] },
+    hero: { frames: [['Y   Y', '(o o)', ' \\@/ '], ['Y   Y', '(o o)', ' /@\\ ']], keys: ['b   b', 'TWTWT', ' TRT '], glow: '@' },
+  },
+];
+
+/* ---------- helpers ---------- */
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rnd = Math.random;
+const pick = (arr, r = rnd) => arr[Math.floor(r() * arr.length)];
+const pickc = (v, r = rnd) => Array.isArray(v) ? pick(v, r) : v;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------- canvas + grid ---------- */
+const wrap = document.getElementById('wrap');
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+const ui = document.getElementById('ui');
+const sndBtn = document.getElementById('snd');
+let W, H, DPR, cw, ch, ROWS, groundRow, FONT;
+let skyL, farL, midL, gndL, pipeL, twinkles = [];
+
+function makeLayer(wPx, hPx) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.ceil(wPx * DPR));
+  cv.height = Math.max(1, Math.ceil(hPx * DPR));
+  const g = cv.getContext('2d');
+  g.scale(DPR, DPR);
+  g.font = FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  return { cv, g, w: wPx, h: hPx };
+}
+function put(g, c, col, row, color) {
+  g.fillStyle = color;
+  g.fillText(c, col * cw + cw / 2, row * ch + ch * 0.54);
+}
+function stamp(g, art, col, row, r) {
+  const m = art.m;
+  art.a.forEach((line, i) => {
+    for (let j = 0; j < line.length; j++) {
+      const c = line[j];
+      if (c === ' ') continue;
+      put(g, c, col + j, row + i, pickc(m[c] !== undefined ? m[c] : m.def, r));
+    }
+  });
+}
+function blockCircle(g, cx, cy, rad, color, block) {
+  g.fillStyle = color;
+  for (let y = cy - rad - block; y <= cy + rad + block; y += block) {
+    for (let x = cx - rad - block; x <= cx + rad + block; x += block) {
+      const bx = Math.floor(x / block) * block, by = Math.floor(y / block) * block;
+      const dx = bx + block / 2 - cx, dy = by + block / 2 - cy;
+      if (dx * dx + dy * dy <= rad * rad) g.fillRect(bx, by, block + 0.5, block + 0.5);
+    }
+  }
+}
+const T = () => THEMES[level];
+function skyIdx(th, r) { return Math.min(th.sky.length - 1, Math.floor(r / Math.max(1, groundRow) * th.sky.length)); }
+
+function resize() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  H = vh; W = Math.min(vw, Math.round(vh * 0.62));
+  wrap.style.width = W + 'px'; wrap.style.height = H + 'px';
+  document.documentElement.style.setProperty('--u', (W / 100).toFixed(2) + 'px');
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  cvs.width = Math.round(W * DPR); cvs.height = Math.round(H * DPR);
+  cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+  cw = W / COLS; ch = cw * 1.8;
+  ROWS = Math.floor(H / ch);
+  groundRow = ROWS - GROUND_ROWS;
+  FONT = `bold ${(cw * 1.62).toFixed(1)}px "Courier New", Courier, monospace`;
+  buildTheme();
+}
+
+/* ---------- pre-rendered scenery ---------- */
+function buildSky(th) {
+  const L = makeLayer(W, H), g = L.g, r = mulberry32(11);
+  for (let row = 0; row <= ROWS; row++) {
+    const i = skyIdx(th, row);
+    g.fillStyle = th.sky[i]; g.fillRect(0, row * ch, W, ch + 1);
+    // chunky checkerboard dither at band boundaries
+    if (skyIdx(th, row + 1) !== i && row < groundRow) {
+      g.fillStyle = th.sky[skyIdx(th, row + 1)];
+      for (let c = row % 2; c < COLS; c += 2) g.fillRect(c * cw, row * ch + ch / 2, cw, ch / 2 + 1);
+    }
+  }
+  // stars
+  const sr = groundRow * 0.6;
+  for (let i = 0; i < th.stars.n; i++) {
+    g.globalAlpha = 0.45 + r() * 0.55;
+    put(g, pick(th.stars.chars, r), Math.floor(r() * COLS), Math.floor(r() * sr), pick(th.stars.colors, r));
+  }
+  g.globalAlpha = 1;
+  twinkles = [];
+  for (let i = 0; i < Math.min(10, th.stars.n); i++) twinkles.push({ c: Math.floor(r() * COLS), r: Math.floor(r() * sr), ph: r() * 4, col: pick(th.stars.colors, r) });
+
+  const blk = cw / 2;
+  if (th.celestial === 'moon') {
+    const cx = W * 0.72, cy = ch * 5.5, rad = cw * 4;
+    blockCircle(g, cx, cy, rad * 1.5, 'rgba(255,230,170,.10)', blk);
+    blockCircle(g, cx, cy, rad * 1.22, 'rgba(255,230,170,.14)', blk);
+    blockCircle(g, cx, cy, rad, '#fff1b8', blk);
+    const mc = Math.floor(cx / cw), mr = Math.floor(cy / ch);
+    [[-1, -1, 'o'], [1, 0, '.'], [0, 1, 'o'], [2, -1, '.'], [-2, 0, '.']].forEach(([dc, dr, c]) => put(g, c, mc + dc, mr + dr, '#d6c27a'));
+  } else if (th.celestial === 'sun') {
+    const cx = W * 0.36, cy = (groundRow - 4) * ch, rad = cw * 5.5;
+    blockCircle(g, cx, cy, rad * 1.7, 'rgba(255,214,120,.12)', blk);
+    blockCircle(g, cx, cy, rad * 1.3, 'rgba(255,214,120,.16)', blk);
+    blockCircle(g, cx, cy, rad, '#ff9a3c', blk);
+    blockCircle(g, cx, cy, rad * 0.78, '#ffd36b', blk);
+    // retro sun stripes
+    for (let k = 0; k < 4; k++) {
+      const y = cy + rad * 0.15 + k * rad * 0.22;
+      g.fillStyle = th.sky[skyIdx(th, Math.floor(y / ch))];
+      g.fillRect(cx - rad, y, rad * 2, Math.max(2, blk * (0.4 + k * 0.25)));
+    }
+    for (let i = 0; i < 5; i++) put(g, pick(['v', '^v'], r), 3 + Math.floor(r() * (COLS - 6)), 2 + Math.floor(r() * 6), '#4a1838');
+  } else if (th.celestial === 'crescent') {
+    const cx = W * 0.22, cy = ch * 4.5, rad = cw * 2.8;
+    blockCircle(g, cx, cy, rad * 1.5, 'rgba(200,225,255,.10)', blk);
+    blockCircle(g, cx, cy, rad, '#f6fbff', blk);
+    blockCircle(g, cx + rad * 0.45, cy - rad * 0.2, rad * 0.85, th.sky[skyIdx(th, Math.floor(cy / ch))], blk);
+    // aurora ribbon
+    const aur = ['#3dffb0', '#2bd4ff', '#7affd4', '#b28bff'];
+    for (let c = 0; c < COLS; c++) {
+      const base = 8 + Math.round(1.8 * Math.sin(c * 0.33) + Math.sin(c * 0.9));
+      for (let k = 0; k < 3; k++) {
+        g.globalAlpha = 0.55 - k * 0.15;
+        put(g, k === 0 ? '~' : (k === 1 ? '-' : '.'), c, base + k, aur[(c + k) % aur.length]);
+      }
+    }
+    g.globalAlpha = 1;
+  }
+  return L;
+}
+
+function buildFar(th) {
+  const f = th.far, L = makeLayer(STRIP * cw, groundRow * ch), g = L.g, r = mulberry32(7);
+  const ph = [r() * 6.28, r() * 6.28, r() * 6.28];
+  for (let c = 0; c < STRIP; c++) {
+    const t = c / STRIP * Math.PI * 2;
+    const hgt = f.base + f.amp * (0.5 * Math.sin(t * 2 + ph[0]) + 0.3 * Math.sin(t * 3 + ph[1]) + 0.2 * Math.sin(t * 5 + ph[2]));
+    const top = clamp(Math.round(groundRow - hgt), 1, groundRow - 1);
+    g.fillStyle = f.bg; g.fillRect(c * cw, top * ch + ch * 0.45, cw + 0.6, (groundRow - top) * ch);
+    put(g, pick(f.top, r), c, top, f.topColor);
+    for (let row = top + 1; row < groundRow; row++) {
+      if (f.snow && row === top + 1) { put(g, ':', c, row, '#dbe9ff'); continue; }
+      const fc = pick(f.fill, r);
+      if (fc !== ' ') put(g, fc, c, row, f.fillColor);
+    }
+  }
+  return L;
+}
+
+function buildMid(th) {
+  const L = makeLayer(STRIP * cw, groundRow * ch), g = L.g, r = mulberry32(23);
+  let x = 1 + Math.floor(r() * 3);
+  while (true) {
+    const art = ART[pick(th.mid, r)];
+    const w = Math.max(...art.a.map(s => s.length));
+    if (x + w > STRIP - 1) break;
+    stamp(g, art, x, groundRow - art.a.length, r);
+    x += w + 2 + Math.floor(r() * 7);
+  }
+  return L;
+}
+
+function buildGround(th) {
+  const gr = th.ground, hPx = H - groundRow * ch + 2, L = makeLayer(STRIP * cw, hPx), g = L.g, r = mulberry32(5);
+  g.fillStyle = gr.bg; g.fillRect(0, 0, STRIP * cw, hPx);
+  g.fillStyle = gr.topBg; g.fillRect(0, 0, STRIP * cw, ch);
+  g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(0, ch - 2, STRIP * cw, 2);
+  const rows = Math.ceil(hPx / ch);
+  for (let c = 0; c < STRIP; c++) {
+    if (r() < gr.decoP) put(g, pick(gr.deco, r), c, 0, pick(gr.decoCol, r));
+    else put(g, pick(gr.top, r), c, 0, pick(gr.topCol, r));
+    for (let row = 1; row < rows; row++) {
+      const fc = pick(gr.fill, r);
+      if (fc !== ' ') put(g, fc, c, row, gr.fillCol);
+    }
+  }
+  return L;
+}
+
+function buildPipe(th) {
+  const p = th.pipe, L = makeLayer(PW * cw, (ROWS + 1) * ch), g = L.g;
+  for (let row = 0; row <= ROWS; row++) {
+    const b = p.body[row % p.body.length];
+    g.fillStyle = b[2] || p.bg; g.fillRect(0, row * ch, PW * cw, ch + 0.6);
+    for (let j = 0; j < PW; j++) if (b[0][j] !== ' ') put(g, b[0][j], j, row, th.pal[b[1][j]] || '#fff');
+  }
+  g.fillStyle = 'rgba(255,255,255,.16)'; g.fillRect(0, 0, cw * 0.5, L.h);
+  g.fillStyle = 'rgba(0,0,0,.30)'; g.fillRect((PW - 0.6) * cw, 0, cw * 0.6, L.h);
+  return L;
+}
+
+/* ---------- game state ---------- */
+const SAVE_KEY = 'holidayflap_v1';
+const save = { unlocked: 1, best: [0, 0, 0] };
+try { Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY)) || {}); } catch (e) { /* private mode */ }
+function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* ignore */ } }
+
+let level = 0, state = 'menu', score = 0, time = 0;
+let hero = { x: HERO_COL, y: 10, vy: 0 };
+let pipes = [], spawned = 0, amb = [], fx = [];
+let farX = 0, midX = 0, gndX = 0, flash = 0, shake = 0, trailT = 0, menuT = 0;
+let pendingUI = null, pendingAt = 0, uiReady = false;
+
+function buildTheme() {
+  if (!W) return;
+  const th = T();
+  skyL = buildSky(th); farL = buildFar(th); midL = buildMid(th); gndL = buildGround(th); pipeL = buildPipe(th);
+  initAmbient(th);
+  document.documentElement.style.setProperty('--accent', th.accent);
+  document.querySelector('meta[name=theme-color]').setAttribute('content', th.sky[0]);
+}
+function setLevel(i) { level = i; buildTheme(); }
+function heroBaseY() { return Math.round(groundRow * 0.42); }
+
+function initAmbient(th) {
+  amb = [];
+  if (th.ambient === 'bats') {
+    for (let i = 0; i < 4; i++) amb.push({ k: 'bat', x: rnd() * COLS, y: 1 + rnd() * groundRow * 0.45, vx: -(1.5 + rnd() * 2), vy: 0, ph: rnd() * 6, col: '#c7a6ff' });
+  } else if (th.ambient === 'leaves') {
+    const cols = ['#e2452c', '#ff8c2a', '#ffd447', '#b5562a'];
+    for (let i = 0; i < 16; i++) amb.push({ k: 'leaf', x: rnd() * COLS, y: rnd() * groundRow, vx: -0.5 - rnd(), vy: 1 + rnd() * 1.8, ph: rnd() * 6, ch: pick(['*', '&', '%', '~']), col: pick(cols) });
+  } else {
+    for (let i = 0; i < 46; i++) amb.push({ k: 'snow', x: rnd() * COLS, y: rnd() * groundRow, vx: -0.3 - rnd() * 0.6, vy: 1.5 + rnd() * 3, ph: rnd() * 6, ch: pick(['.', '*', '+', '.', '.']), col: pick(['#ffffff', '#dbeeff', '#bcdcff']), fg: rnd() < 0.3 });
+  }
+}
+
+/* ---------- audio (tiny synth, no assets) ---------- */
+let AC = null, muted = false;
+try { muted = localStorage.getItem('holidayflap_mute') === '1'; } catch (e) { /* ignore */ }
+function ac() {
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
+function tone(f, d, type, v, f2, delay) {
+  if (muted) return;
+  const a = ac(); if (!a) return;
+  const t = a.currentTime + (delay || 0);
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(f, t);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + d);
+  g.gain.setValueAtTime(v || 0.05, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(a.destination);
+  o.start(t); o.stop(t + d + 0.02);
+}
+const SFX = {
+  flap: () => tone(380, 0.09, 'square', 0.04, 760),
+  score: () => { const w = T().wave; tone(988, 0.07, w, 0.05); tone(1319, 0.14, w, 0.05, 0, 0.07); },
+  hit: () => { tone(260, 0.32, 'sawtooth', 0.08, 50); tone(90, 0.25, 'square', 0.06, 40, 0.05); },
+  clear: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.16, T().wave, 0.05, 0, i * 0.09)),
+  win: () => [523, 659, 784, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, 0.2, 'triangle', 0.06, 0, i * 0.12)),
+};
+function updateSndBtn() { sndBtn.textContent = muted ? 'SND:OFF' : 'SND:ON'; }
+updateSndBtn();
+sndBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  muted = !muted; updateSndBtn();
+  try { localStorage.setItem('holidayflap_mute', muted ? '1' : '0'); } catch (err) { /* ignore */ }
+  if (!muted) { ac(); SFX.flap(); }
+});
+
+/* ---------- flow ---------- */
+function startLevel(i) {
+  setLevel(i);
+  state = 'ready'; score = 0; pipes = []; spawned = 0; fx = []; pendingUI = null;
+  hero.y = heroBaseY(); hero.vy = 0;
+  showReady();
+}
+function beginPlay() { state = 'play'; ui.innerHTML = ''; uiReady = false; flap(); }
+function flap() {
+  hero.vy = -FLAP_V; SFX.flap();
+  const th = T();
+  for (let i = 0; i < 3; i++) fx.push({ x: hero.x + 1 + rnd() * 2, y: hero.y + 2.6, vx: -3 - rnd() * 3, vy: 2 + rnd() * 3, ch: pick(th.trail.chars), col: pick(th.trail.cols), life: 0.35, max: 0.35, g: 0 });
+}
+function spawnPipe(x) {
+  const th = T(), last = pipes[pipes.length - 1];
+  const minG = 2, maxG = Math.max(minG, groundRow - th.gap - 2);
+  const prev = last ? last.gapY : Math.round((minG + maxG) / 2);
+  const maxDelta = Math.min(6, Math.floor(th.gap * 0.55)); // keep every gap reachable
+  const gapY = clamp(prev + Math.round((rnd() * 2 - 1) * maxDelta), minG, maxG);
+  pipes.push({ x, gapY, scored: false });
+  spawned++;
+}
+function die() {
+  state = 'dead'; flash = 1; shake = 0.45; hero.vy = -9;
+  SFX.hit();
+  if (navigator.vibrate) navigator.vibrate(70);
+  const th = T();
+  for (let i = 0; i < 18; i++) {
+    const a = rnd() * Math.PI * 2, s = 4 + rnd() * 10;
+    fx.push({ x: hero.x + 2.5, y: hero.y + 1.5, vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.6 - 4, ch: pick(th.trail.chars.concat(['*', '#'])), col: pick(th.trail.cols.concat([th.accent])), life: 0.9, max: 0.9, g: 22 });
+  }
+  if (score > save.best[level]) { save.best[level] = score; persist(); }
+  queueUI(showDead, 0.8);
+}
+function levelClear() {
+  const th = T();
+  // burst remaining obstacles into confetti
+  pipes.forEach(p => {
+    if (p.x > COLS + 2) return;
+    for (let i = 0; i < 22; i++) {
+      const top = rnd() < 0.5, y = top ? rnd() * p.gapY : p.gapY + th.gap + rnd() * (groundRow - p.gapY - th.gap);
+      const b = th.pipe.body[i % th.pipe.body.length];
+      fx.push({ x: p.x + rnd() * PW, y, vx: (rnd() - 0.5) * 14, vy: -4 - rnd() * 8, ch: b[0][i % PW], col: th.pal[b[1][i % PW]] || th.accent, life: 1.2, max: 1.2, g: 18 });
+    }
+  });
+  pipes = [];
+  save.best[level] = Math.max(save.best[level], score);
+  save.unlocked = Math.max(save.unlocked, Math.min(THEMES.length, level + 2));
+  persist();
+  if (level === THEMES.length - 1) { state = 'win'; SFX.win(); queueUI(showWin, 0.9); }
+  else { state = 'clear'; SFX.clear(); queueUI(showClear, 0.9); }
+}
+function goMenu() { state = 'menu'; menuT = 0; pipes = []; fx = []; pendingUI = null; hero.vy = 0; showMenu(); }
+function queueUI(fn, delay) { pendingUI = fn; pendingAt = time + delay; uiReady = false; ui.innerHTML = ''; }
+
+/* ---------- UI overlays ---------- */
+const LOGO = (() => {
+  const L = {
+    H: [' _  _ ', '| || |', '| __ |', '|_||_|'],
+    O: ['  ___  ', ' / _ \\ ', '| (_) |', ' \\___/ '],
+    L: [' _    ', '| |   ', '| |__ ', '|____|'],
+    I: [' ___ ', '|_ _|', ' | | ', '|___|'],
+    D: [' ___  ', '|   \\ ', '| |) |', '|___/ '],
+    A: ['   _   ', '  /_\\  ', ' / _ \\ ', '/_/ \\_\\'],
+    Y: ['__   __', '\\ \\ / /', ' \\ V / ', '  |_|  '],
+  };
+  const cols = ['#ff8a1f', '#b88cff', '#58d05c', '#ffb53c', '#ff3b4e', '#ffe14d', '#4aa8ff'];
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  let out = '';
+  for (let row = 0; row < 4; row++) {
+    'HOLIDAY'.split('').forEach((ch, i) => { out += `<span style="color:${cols[i]}">${esc(L[ch][row])}</span>`; });
+    out += '\n';
+  }
+  return out;
+})();
+
+function showMenu() {
+  uiReady = true;
+  const btns = THEMES.map((th, i) => {
+    const locked = i + 1 > save.unlocked, best = save.best[i], done = best >= th.goal;
+    const right = locked ? 'LOCKED' : (done ? '[*] CLEARED' : `best ${best}/${th.goal}`);
+    return `<button class="btn" data-act="lvl" data-i="${i}" style="background:${th.accent}" ${locked ? 'disabled' : ''}><span>${i + 1}. ${th.name}</span><small>${right}</small></button>`;
+  }).join('');
+  ui.innerHTML = `<div class="panel">
+    <pre class="logo">${LOGO}</pre>
+    <div class="flap" style="color:var(--accent)">F L A P</div>
+    <div class="sub">a one-button ASCII holiday arcade</div>
+    ${btns}
+    <div class="hint">tap (or space) to flap &middot; clear a level to unlock the next</div>
+  </div>`;
+}
+function showReady() {
+  const th = T();
+  uiReady = true;
+  ui.innerHTML = `<div class="ready">
+      <div class="lv">LEVEL ${level + 1} / ${THEMES.length}</div>
+      <div class="ttl" style="color:${th.accent}">${th.name}</div>
+      <div class="txt">${th.blurb}</div>
+      <div class="txt">Pass <b style="color:${th.accent}">${th.goal}</b> ${th.obstacle}.</div>
+    </div>
+    <div class="tap blink">TAP TO FLAP!</div>`;
+}
+function showDead() {
+  const th = T();
+  ui.innerHTML = `<div class="panel">
+    <div class="ttl" style="color:${th.accent}">${th.deathMsg}</div>
+    <div class="big">${score}<small>/${th.goal}</small></div>
+    <div class="txt">BEST ${save.best[level]}/${th.goal}</div>
+    <button class="btn c" data-act="retry">RETRY</button>
+    <button class="btn c alt" data-act="menu">MENU</button>
+  </div>`;
+}
+function showClear() {
+  const th = T(), nx = THEMES[level + 1];
+  ui.innerHTML = `<div class="panel">
+    <div class="lv">LEVEL ${level + 1} COMPLETE</div>
+    <div class="ttl" style="color:${th.accent}">${th.name}<br>CLEARED!</div>
+    <div class="txt">Next up: <b style="color:${nx.accent}">${nx.name}</b></div>
+    <button class="btn c" data-act="next" style="background:${nx.accent}">NEXT LEVEL &gt;&gt;</button>
+    <button class="btn c alt" data-act="menu">MENU</button>
+  </div>`;
+}
+function showWin() {
+  ui.innerHTML = `<div class="panel">
+    <pre class="logo" style="text-align:center;font-size:calc(var(--u)*4.2);color:#ffe14d">*  .  *  .  *\n\\o/ \\o/ \\o/</pre>
+    <div class="ttl" style="color:var(--accent);margin-top:calc(var(--u)*2)">YOU SAVED<br>THE HOLIDAYS!</div>
+    <div class="txt">Boo, Tom &amp; Rudy made it home.<br>All ${THEMES.length} levels cleared.</div>
+    <button class="btn c" data-act="again" style="background:${THEMES[0].accent}">PLAY AGAIN</button>
+    <button class="btn c alt" data-act="menu">MENU</button>
+  </div>`;
+}
+
+ui.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-act]');
+  if (!b || b.disabled) return;
+  ac();
+  const act = b.dataset.act;
+  if (act === 'lvl') startLevel(+b.dataset.i);
+  else if (act === 'retry') startLevel(level);
+  else if (act === 'next') startLevel(level + 1);
+  else if (act === 'again') startLevel(0);
+  else if (act === 'menu') goMenu();
+});
+
+function press() {
+  if (state === 'ready') beginPlay();
+  else if (state === 'play') flap();
+}
+wrap.addEventListener('pointerdown', (e) => {
+  ac();
+  if (e.target.closest('button')) return;
+  e.preventDefault();
+  press();
+});
+document.addEventListener('touchend', () => { if (AC && AC.state === 'suspended') AC.resume(); }, { passive: true });
+document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (!['Space', 'ArrowUp', 'KeyW', 'Enter'].includes(e.code)) return;
+  e.preventDefault(); ac();
+  if (state === 'ready' || state === 'play') press();
+  else if (!uiReady) return;
+  else if (state === 'menu') startLevel(Math.min(save.unlocked, THEMES.length) - 1);
+  else if (state === 'dead') startLevel(level);
+  else if (state === 'clear') startLevel(level + 1);
+  else if (state === 'win') startLevel(0);
+});
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 150));
+
+/* ---------- update ---------- */
+function update(dt) {
+  time += dt;
+  const th = T();
+  const moving = state !== 'dead';
+  const spd = moving ? th.speed : 0;
+  farX += spd * 0.12 * dt; midX += spd * 0.4 * dt; gndX += spd * dt;
+  flash = Math.max(0, flash - dt * 3); shake = Math.max(0, shake - dt);
+
+  if (pendingUI && time >= pendingAt) { const f = pendingUI; pendingUI = null; uiReady = true; f(); }
+
+  if (state === 'menu') {
+    menuT += dt;
+    if (menuT > 6) { menuT = 0; setLevel((level + 1) % THEMES.length); showMenu(); }
+  }
+
+  if (state === 'play') {
+    hero.vy = Math.min(hero.vy + GRAVITY * dt, MAX_FALL);
+    hero.y += hero.vy * dt;
+    if (hero.y < 0) { hero.y = 0; hero.vy = Math.max(0, hero.vy); }
+
+    const last = pipes[pipes.length - 1];
+    if (spawned < th.goal && (!last || last.x <= COLS - th.spacing)) spawnPipe(last ? last.x + th.spacing : COLS + 4);
+    for (const p of pipes) p.x -= th.speed * dt;
+    pipes = pipes.filter(p => p.x > -PW - 3);
+
+    // collisions (slightly forgiving hitbox)
+    const hx1 = hero.x + 0.55, hx2 = hero.x + 4.45, hy1 = hero.y + 0.3, hy2 = hero.y + 2.75;
+    let hit = hy2 >= groundRow;
+    for (const p of pipes) {
+      const gTop = p.gapY, gBot = p.gapY + th.gap;
+      const outY = hy1 < gTop || hy2 > gBot;
+      if (outY && hx2 > p.x && hx1 < p.x + PW) hit = true;
+      // cap lips overhang 1 col on each side
+      const inCap = (hy1 < gTop && hy2 > gTop - 1) || (hy2 > gBot && hy1 < gBot + 1);
+      if (inCap && hx2 > p.x - 1 && hx1 < p.x + PW + 1) hit = true;
+      if (!p.scored && p.x + PW < hx1) {
+        p.scored = true; score++; SFX.score();
+        if (score >= th.goal) { levelClear(); break; }
+      }
+    }
+    if (hit && state === 'play') die();
+
+    trailT += dt;
+    if (trailT > 0.05 && state === 'play') {
+      trailT = 0;
+      fx.push({ x: hero.x - 0.2, y: hero.y + 0.6 + rnd() * 1.8, vx: -th.speed * 0.45 - rnd() * 2, vy: (rnd() - 0.5) * 2, ch: pick(th.trail.chars), col: pick(th.trail.cols), life: 0.5, max: 0.5, g: 0 });
+    }
+  } else if (state === 'dead') {
+    hero.vy = Math.min(hero.vy + GRAVITY * dt, MAX_FALL);
+    hero.y += hero.vy * dt;
+    if (hero.y + 3 >= groundRow) { hero.y = groundRow - 3; hero.vy = 0; }
+  } else {
+    const target = heroBaseY() + Math.sin(time * 3) * 0.7;
+    hero.y += (target - hero.y) * Math.min(1, dt * 4);
+    hero.vy = 0;
+    for (const p of pipes) p.x -= th.speed * dt;
+  }
+
+  if (state === 'win' && rnd() < dt * 30) {
+    const t = pick(THEMES);
+    fx.push({ x: rnd() * COLS, y: -1, vx: (rnd() - 0.5) * 3, vy: 3 + rnd() * 4, ch: pick(['*', '+', 'o', '#', '@', '&']), col: pick([t.accent, '#ffe14d', '#ffffff', '#2fd16a', '#b88cff']), life: 3, max: 3, g: 2 });
+  }
+
+  // ambient
+  for (const a of amb) {
+    a.x += (a.vx - spd * 0.25) * dt + (a.k !== 'bat' ? Math.sin(time * 1.6 + a.ph) * dt * 1.2 : 0);
+    a.y += a.k === 'bat' ? Math.sin(time * 3 + a.ph) * dt * 1.6 : a.vy * dt;
+    if (a.x < -4) { a.x += COLS + 8; if (a.k === 'bat') a.y = 1 + rnd() * groundRow * 0.45; }
+    if (a.x > COLS + 6) a.x -= COLS + 8;
+    if (a.y > groundRow) { a.y = -1; a.x = rnd() * (COLS + 6); }
+  }
+  for (const p of fx) { p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  fx = fx.filter(p => p.life > 0);
+}
+
+/* ---------- render ---------- */
+function drawStrip(L, off, y) {
+  const w = STRIP * cw;
+  let x = -((off * cw) % w);
+  x = Math.round(x * DPR) / DPR;
+  ctx.drawImage(L.cv, x, y, w, L.h);
+  ctx.drawImage(L.cv, x + w - 0.5, y, w, L.h);
+}
+function drawCap(th, x, row, top) {
+  const p = th.pipe, cap = top ? (p.capTop || p.cap) : p.cap;
+  ctx.fillStyle = p.capBg; ctx.fillRect((x - 1) * cw, row * ch, (PW + 2) * cw, ch);
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect((x - 1) * cw, top ? row * ch + ch - 2 : row * ch, (PW + 2) * cw, 2);
+  for (let j = 0; j < cap[0].length; j++) {
+    const c = cap[0][j]; if (c === ' ') continue;
+    const k = cap[1][j];
+    const col = k === '?' ? p.twinkle[(Math.floor(time * 4) + j) % p.twinkle.length] : (th.pal[k] || '#fff');
+    put(ctx, c, x - 1 + j, row, col);
+  }
+}
+function drawHero(th) {
+  const h = th.hero, fr = h.frames[Math.floor(time * (state === 'play' ? 9 : 5)) % h.frames.length];
+  const ox = Math.max(1, cw * 0.09);
+  for (let r = 0; r < fr.length; r++) {
+    let line = fr[r];
+    if (state === 'dead' && r === 1) line = line.replace(/o/g, 'x');
+    for (let j = 0; j < line.length; j++) {
+      const c = line[j]; if (c === ' ') continue;
+      const px = (hero.x + j) * cw + cw / 2, py = (hero.y + r) * ch + ch * 0.54;
+      ctx.fillStyle = '#000';
+      ctx.fillText(c, px - ox, py); ctx.fillText(c, px + ox, py);
+      ctx.fillText(c, px, py - ox); ctx.fillText(c, px, py + ox);
+      const glow = h.glow === c;
+      if (glow) { ctx.shadowColor = '#ff2a3d'; ctx.shadowBlur = cw * (1.2 + 0.5 * Math.sin(time * 8)); }
+      ctx.fillStyle = th.pal[h.keys[r][j]] || '#fff';
+      ctx.fillText(c, px, py);
+      if (glow) ctx.shadowBlur = 0;
+    }
+  }
+}
+function drawAmb(fg) {
+  for (const a of amb) {
+    if (!!a.fg !== fg) continue;
+    if (a.k === 'bat') {
+      const s = Math.floor(time * 7 + a.ph) % 2 ? '^o^' : 'vov';
+      for (let j = 0; j < 3; j++) put(ctx, s[j], a.x + j, a.y, a.col);
+    } else {
+      ctx.globalAlpha = fg ? 0.95 : 0.7;
+      put(ctx, a.ch, a.x, a.y, a.col);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+function render() {
+  const th = T();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.font = FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (shake > 0) ctx.translate((rnd() - 0.5) * shake * cw * 2, (rnd() - 0.5) * shake * ch);
+
+  ctx.drawImage(skyL.cv, 0, 0, W, H);
+  twinkles.forEach((s, i) => {
+    const k = Math.floor(time * 2.5 + s.ph) % 4;
+    ctx.globalAlpha = k === 0 ? 0.4 : 1;
+    put(ctx, ['.', '+', '*', '+'][k], s.c, s.r, s.col);
+  });
+  ctx.globalAlpha = 1;
+  drawStrip(farL, farX, 0);
+  drawStrip(midL, midX, 0);
+  drawAmb(false);
+
+  for (const p of pipes) {
+    if (p.x > COLS + 2 || p.x < -PW - 2) continue;
+    const px = p.x * cw;
+    const topRows = p.gapY, botStart = p.gapY + th.gap, botRows = groundRow - botStart;
+    if (topRows > 0) ctx.drawImage(pipeL.cv, 0, 0, pipeL.cv.width, topRows * ch * DPR, px, 0, PW * cw, topRows * ch);
+    if (botRows > 0) ctx.drawImage(pipeL.cv, 0, 0, pipeL.cv.width, botRows * ch * DPR, px, botStart * ch, PW * cw, botRows * ch);
+    if (topRows > 0) drawCap(th, p.x, p.gapY - 1, true);
+    drawCap(th, p.x, botStart, false);
+  }
+
+  drawStrip(gndL, gndX, groundRow * ch);
+
+  for (const p of fx) {
+    if (p.g === 0) { ctx.globalAlpha = Math.max(0, p.life / p.max); put(ctx, p.ch, p.x, p.y, p.col); }
+  }
+  ctx.globalAlpha = 1;
+  drawHero(th);
+  for (const p of fx) {
+    if (p.g !== 0) { ctx.globalAlpha = Math.min(1, Math.max(0, p.life / p.max * 1.5)); put(ctx, p.ch, p.x, p.y, p.col); }
+  }
+  ctx.globalAlpha = 1;
+  drawAmb(true);
+
+  if (state === 'play' || state === 'dead') {
+    ctx.lineJoin = 'round';
+    ctx.font = `bold ${Math.round(cw * 3.4)}px "Courier New", Courier, monospace`;
+    ctx.lineWidth = Math.max(3, cw * 0.55); ctx.strokeStyle = '#000';
+    const sy = ch * 2.4;
+    ctx.strokeText(String(score), W / 2, sy); ctx.fillStyle = '#fff'; ctx.fillText(String(score), W / 2, sy);
+    ctx.font = FONT;
+    const bar = '[' + '#'.repeat(Math.min(score, th.goal)) + '-'.repeat(Math.max(0, th.goal - score)) + ']';
+    ctx.lineWidth = Math.max(2, cw * 0.3);
+    ctx.strokeText(bar, W / 2, sy + ch * 1.9); ctx.fillStyle = th.accent; ctx.fillText(bar, W / 2, sy + ch * 1.9);
+  }
+
+  if (flash > 0) { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = `rgba(255,255,255,${flash * 0.7})`; ctx.fillRect(0, 0, W, H); }
+}
+
+/* ---------- loop ---------- */
+let lastT = performance.now();
+function frame(t) {
+  let dt = Math.min(0.05, Math.max(0, (t - lastT) / 1000));
+  lastT = t;
+  // sub-step physics for consistent feel across refresh rates
+  const steps = Math.ceil(dt / (1 / 120));
+  for (let i = 0; i < steps; i++) update(dt / steps);
+  render();
+  requestAnimationFrame(frame);
+}
+
+resize();
+hero.y = heroBaseY();
+showMenu();
+requestAnimationFrame(frame);
+
+// small hook for automated smoke tests
+window.HolidayFlap = {
+  startLevel, flap: press,
+  get snapshot() { return { state, level, score, hero: { ...hero }, groundRow, gap: T().gap, goal: T().goal, pipes: pipes.map(p => ({ ...p })) }; },
+};
+</script>
+</body>
+</html>
